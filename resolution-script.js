@@ -16,7 +16,7 @@ const marketAddress = args[0];
 
 // 构建我们后端 API 的 URL。
 // 在真实部署中，这里应该是你的公开服务器地址，而不是localhost。
-const apiURL = `http://localhost:3000/get-resolution/${marketAddress}`;
+const apiURL = `https://backend-gimz.onrender.com/get-resolution/${marketAddress}`;
 
 console.log(`正在向 API 发起请求: ${apiURL}`);
 
