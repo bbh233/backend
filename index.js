@@ -95,22 +95,34 @@ const apiKeyMiddleware = (req, res, next) => {
  * :contractAddress 和 :tokenId 是动态路由数据， 可以从 req.params 中获取
  */
 
-// 在你的 backend/index.js 文件中，找到並替換這個接口
-// 在你的 backend/index.js 文件中，找到並替換這個接口
 app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
     try {
         const { contractAddress, tokenId } = req.params;
-        
+
+        // --- Basic input validation ---
+        if (!ethers.isAddress(contractAddress)) {
+            return res.status(400).json({ error: 'Invalid contract address.' });
+        }
+        if (tokenId !== '0' && tokenId !== '1') {
+             return res.status(400).json({ error: 'Token ID must be 0 or 1.' });
+        }
+        // --- End validation ---
+
         const marketContract = new ethers.Contract(contractAddress, predictionMarketAbi, provider);
 
-        const option0 = await marketContract.options(0);
-        const option1 = await marketContract.options(1);
-        const totalPool = await marketContract.totalPool();
-        const isResolved = await marketContract.isResolved();
-        
-        let odds = 50; 
-        if(totalPool > 0) {
-            odds = Number((option0.totalPool * 100n) / totalPool);
+        // Fetch all data in parallel for efficiency
+        const [option0, option1, totalPool, isResolved] = await Promise.all([
+            marketContract.options(0),
+            marketContract.options(1),
+            marketContract.totalPool(),
+            marketContract.isResolved()
+        ]);
+
+        let odds = 50;
+        if (totalPool > 0n) {
+            // Use the token's specific option pool for odds calculation
+            const userOptionPool = tokenId === '0' ? option0.totalPool : option1.totalPool;
+            odds = Number((userOptionPool * 100n) / totalPool);
         }
 
         const imageUrls = {
@@ -128,14 +140,20 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
 
         if (isResolved) {
             const winningIndex = await marketContract.winningOptionIndex();
-            if (winningIndex === 0n) {
+            
+            // --- CORRECTED LOGIC ---
+            // Convert tokenId string to BigInt for comparison
+            const userTokenIdAsBigInt = BigInt(tokenId);
+
+            if (winningIndex === userTokenIdAsBigInt) {
                 currentImage = imageUrls.win;
                 resultAttribute.value = "Won";
             } else {
                 currentImage = imageUrls.loss;
                 resultAttribute.value = "Lost";
-            } 
+            }
         } else {
+            // This logic correctly reflects the odds for the user's specific token
             if (odds > 75) currentImage = imageUrls.huge_advantage;
             else if (odds > 55) currentImage = imageUrls.slight_advantage;
             else if (odds < 25) currentImage = imageUrls.huge_disadvantage;
@@ -147,11 +165,10 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
             description: "A dynamic NFT representing a position in a dBet prediction market.",
             image: currentImage,
             attributes: [
-                { "trait_type": "Odds (Option 0)", "value": `${odds.toFixed(2)}%` },
+                { "trait_type": "Your Option's Odds", "value": `${odds.toFixed(2)}%` },
                 resultAttribute
             ]
         };
-        
         res.json(metadata);
 
     } catch (error) {
@@ -159,7 +176,6 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
         res.status(500).json({ error: '获取元数据失败。' });
     }
 });
-
 
 
 /**
