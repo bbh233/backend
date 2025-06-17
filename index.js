@@ -53,7 +53,7 @@ const predictionMarketAbi = [
     "function options(uint256) view returns (bytes32 name, uint256 totalPool)",
     "function totalPool() view returns (uint256)",
     "function isResolved() view returns (bool)",
-    "functionn winningOptionIndex() view returns (uint256)"
+    "function winningOptionIndex() view returns (uint256)"
 ];
 
 
@@ -96,6 +96,82 @@ const apiKeyMiddleware = (req, res, next) => {
  */
 
 // 在你的 backend/index.js 文件中，找到並替換這個接口
+// 在你的 backend/index.js 文件中，找到並替換這個接口
+app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
+    try {
+        const { contractAddress, tokenId } = req.params;
+        
+        // =========================================================
+        //  核心修正 1：在創建合約實例時，傳入 provider
+        // =========================================================
+        // 這會將合約實例連接到你在 .env 中配置的 Sepolia 網絡節點
+        const marketContract = new ethers.Contract(contractAddress, predictionMarketAbi, provider);
+
+        // --- 從區塊鏈異步讀取實時數據 ---
+        const option0 = await marketContract.options(0);
+        const option1 = await marketContract.options(1);
+        const totalPool = await marketContract.totalPool();
+        const isResolved = await marketContract.isResolved();
+        
+        let odds = 50; 
+        if(totalPool > 0) {
+            odds = Number((option0.totalPool * 100n) / totalPool);
+        }
+
+        // =========================================================
+        //  核心修正 2：為所有 IPFS CID 添加 "ipfs://" 前綴
+        // =========================================================
+        const imageUrls = {
+            initial:           "ipfs://bafybeihnupuikrn6zwq7aozfmtw7eppqf4hhrasyo2lpari7arz27i6pqq",
+            slight_advantage:  "ipfs://bafybeihnupuikrn6zwq7aozfmtw7eppqf4hhrasyo2lpari7arz27i6pqq",
+            huge_advantage:    "ipfs://bafybeiecjtvd4xxlyjlr2uagy2ermnkfyfhgbdzhqrp4coflmwef33o6pm",
+            win:               "ipfs://bafybeigeswyw24exdy5r4hvx2zg3yvfprcazhja5aowqwlvejeviizoomm",
+            slight_disadvantage:"ipfs://bafybeihyqd3sltgm72vcn2mbd2tcm64qqxtmnm232a5rujnonox7j4w77q",
+            huge_disadvantage: "ipfs://bafybeifubqeukm7q5fd5wxulstptokvbrq3jmdho6em5rh6kk4vi6mod2y",
+            loss:              "ipfs://bafybeihiaeifcob2wsqc5tqg6ae3voc5wzfuhp7pf2ln56t3njibbjhgkq"
+        };
+
+        let currentImage = imageUrls.initial;
+        let resultAttribute = { "trait_type": "Result", "value": "Pending" };
+
+        if (isResolved) {
+            const winningIndex = await marketContract.winningOptionIndex();
+            // 簡化邏輯：暫時只顯示選項0的視角
+            if (winningIndex === 0n) {
+                currentImage = imageUrls.win;
+                resultAttribute.value = "Won";
+            } else {
+                currentImage = imageUrls.loss;
+                resultAttribute.value = "Lost";
+            } 
+        } else {
+            if (odds > 75) currentImage = imageUrls.huge_advantage;
+            else if (odds > 55) currentImage = imageUrls.slight_advantage;
+            else if (odds < 25) currentImage = imageUrls.huge_disadvantage;
+            else if (odds < 45) currentImage = imageUrls.slight_disadvantage;
+        }
+
+        // 构建符合OpenSea元数据标准的JSON对象
+        const metadata = {
+            name: `Prediction Market Position #${tokenId}`,
+            // 核心修正 3：將 "describe" 修改為 "description"
+            description: "A dynamic NFT representing a position in a dBet prediction market.",
+            image: currentImage,
+            attributes: [
+                { "trait_type": "Odds (Option 0)", "value": `${odds.toFixed(2)}%` },
+                // 核心修正 4：確保 resultAttribute 總是被包含
+                resultAttribute
+            ]
+        };
+        
+        // 将构建好的JSON对象作为响应返回
+        res.json(metadata);
+
+    } catch (error) {
+        console.error("元数据获取失败:", error);
+        res.status(500).json({ error: '获取元数据失败。' });
+    }
+});
 
 app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
     try {
