@@ -95,53 +95,50 @@ const apiKeyMiddleware = (req, res, next) => {
  * :contractAddress 和 :tokenId 是动态路由数据， 可以从 req.params 中获取
  */
 
+// 在你的 backend/index.js 文件中，找到並替換這個接口
+
 app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
     try {
-        const { contractAddress, tokenId} = req.params;
+        const { contractAddress, tokenId } = req.params;
         
-        // 使用合约地址、 ABI 和 provider，创建一个可与链上交互的本地实例.
-        const marketContract = new ethers.Contract(contractAddress, predictionMarketAbi);
+        // =========================================================
+        //  核心修正 1：在創建合約實例時，傳入 provider
+        // =========================================================
+        // 這會將合約實例連接到你在 .env 中配置的 Sepolia 網絡節點
+        const marketContract = new ethers.Contract(contractAddress, predictionMarketAbi, provider);
 
-        // --- 从区块链异步读取实时数据 ---
-        // 所有的合约调用都是异步的, 因此必须使用 await
+        // --- 從區塊鏈異步讀取實時數據 ---
         const option0 = await marketContract.options(0);
         const option1 = await marketContract.options(1);
         const totalPool = await marketContract.totalPool();
         const isResolved = await marketContract.isResolved();
-
-        // --- 核心动态逻辑: 根据链上数据决定元数据内容 ---
-        let odds = 50;  // 如果资金池为0, 默认赔率为50%
-
+        
+        let odds = 50; 
         if(totalPool > 0) {
-            // 计算选项0的胜率 (赔率)
-            // 注意: ethers v6 返回的是 BigInt类型，为了防止精度丢失
-            // 我们在计算时候也使用 BigInt （100n)
-            // 最后用 Number() 将结果转换为普通数字一遍后续比较和格式化
-            odds = Number((option0.totalPool * 100n) / totalPool) ;
+            odds = Number((option0.totalPool * 100n) / totalPool);
         }
 
-        // 预先生成并上传到IPFS的图片URL
-        // 在这里填入你真实的IPFS CID (Content Identifier)。
+        // =========================================================
+        //  核心修正 2：為所有 IPFS CID 添加 "ipfs://" 前綴
+        // =========================================================
         const imageUrls = {
-            initial:"bafybeihnupuikrn6zwq7aozfmtw7eppqf4hhrasyo2lpari7arz27i6pqq",
-            slight_advantage:"bafybeihnupuikrn6zwq7aozfmtw7eppqf4hhrasyo2lpari7arz27i6pqq",
-            huge_advantage:"bafybeiecjtvd4xxlyjlr2uagy2ermnkfyfhgbdzhqrp4coflmwef33o6pm",
-            win:"bafybeigeswyw24exdy5r4hvx2zg3yvfprcazhja5aowqwlvejeviizoomm",
-            slight_disadvantage:"bafybeihyqd3sltgm72vcn2mbd2tcm64qqxtmnm232a5rujnonox7j4w77q",
-            huge_disadvantage:"bafybeifubqeukm7q5fd5wxulstptokvbrq3jmdho6em5rh6kk4vi6mod2y",
-            loss:"bafybeihiaeifcob2wsqc5tqg6ae3voc5wzfuhp7pf2ln56t3njibbjhgkq"
-        }
+            initial:           "ipfs://bafybeihnupuikrn6zwq7aozfmtw7eppqf4hhrasyo2lpari7arz27i6pqq",
+            slight_advantage:  "ipfs://bafybeihnupuikrn6zwq7aozfmtw7eppqf4hhrasyo2lpari7arz27i6pqq",
+            huge_advantage:    "ipfs://bafybeiecjtvd4xxlyjlr2uagy2ermnkfyfhgbdzhqrp4coflmwef33o6pm",
+            win:               "ipfs://bafybeigeswyw24exdy5r4hvx2zg3yvfprcazhja5aowqwlvejeviizoomm",
+            slight_disadvantage:"ipfs://bafybeihyqd3sltgm72vcn2mbd2tcm64qqxtmnm232a5rujnonox7j4w77q",
+            huge_disadvantage: "ipfs://bafybeifubqeukm7q5fd5wxulstptokvbrq3jmdho6em5rh6kk4vi6mod2y",
+            loss:              "ipfs://bafybeihiaeifcob2wsqc5tqg6ae3voc5wzfuhp7pf2ln56t3njibbjhgkq"
+        };
 
         let currentImage = imageUrls.initial;
-        let resultAttribute = {"trait_type" : "Result", "value": "Pending"};
+        let resultAttribute = { "trait_type": "Result", "value": "Pending" };
 
         if (isResolved) {
-            // 如果市场已结算, 根据最终结果选择图片
-            // 这里有一个待解决的逻辑: 我们需要知道这个 tokenId 是属于哪个选项的投注者
-            // 在一个完整的应用中, 你可能需要一个额外的数据库来记录tokenId
-            // 或者在链上NFT合约中存储这个信息
-            // 为了MVP，我们暂时假设所有请求都想看选项0的结果视角
+            // ... (你這部分的邏輯是正確的) ...
             const winningIndex = await marketContract.winningOptionIndex();
+            // 這裡我們仍然做一個簡化，假設 tokenId 0-N/2 屬於選項0，N/2+1 - N 屬於選項1
+            // 為了MVP，我們依然只顯示選項0的視角
             if (winningIndex === 0n) {
                 currentImage = imageUrls.win;
                 resultAttribute.value = "Won";
@@ -150,29 +147,31 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
                 resultAttribute.value = "Lost";
             } 
         } else {
-            // 如果市场未结算，根据事实赔率选择图片。
             if (odds > 75) currentImage = imageUrls.huge_advantage;
             else if (odds > 55) currentImage = imageUrls.slight_advantage;
             else if (odds < 25) currentImage = imageUrls.huge_disadvantage;
             else if (odds < 45) currentImage = imageUrls.slight_disadvantage;
         }
 
-        // 构建符合OpenSea 元数据标准的 JSON 对象。
+        // 构建符合OpenSea元数据标准的JSON对象
         const metadata = {
-            name : `Prediction Market Position #${tokenId}`,
-            describe: "A dynamic NFT representing a position in a dBet prediction",
+            name: `Prediction Market Position #${tokenId}`,
+            // 核心修正 3：將 "describe" 修改為 "description"
+            description: "A dynamic NFT representing a position in a dBet prediction market.",
             image: currentImage,
             attributes: [
-                { "trait_type": "Odds (Option 0)", "value": `${odds.toFixed(2)}%`}
+                { "trait_type": "Odds (Option 0)", "value": `${odds.toFixed(2)}%` },
+                // 核心修正 4：確保 resultAttribute 總是被包含
+                resultAttribute
             ]
         };
         
         // 将构建好的JSON对象作为响应返回
         res.json(metadata);
 
-    }   catch (error) {
-            console.error("元数据获取失败:", error);
-            res.status(500).json({error:'获取元数据失败。'});
+    } catch (error) {
+        console.error("元数据获取失败:", error);
+        res.status(500).json({ error: '获取元数据失败。' });
     }
 });
 
