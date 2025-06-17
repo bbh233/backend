@@ -53,7 +53,6 @@ console.log(`从 API 获取的获胜选项索引为: ${winningOptionIndex}`);
 // 我们的 PredictionMarket 合约接收到这个 bytes 值后， 会自动将其解码为 uint256
 const encodedResult = Functions.encodeUint256(winningOptionIndex);
 
-console.log(`编码后的结果 (bytes): ${ethers.utils.hexlify(encodedResult)}`);
 
 // 返回编码后的结果
 return encodedResult;
