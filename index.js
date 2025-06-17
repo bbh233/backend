@@ -49,11 +49,16 @@ const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
 
 // ABI 合约的结构体描述，同时规定了数据编码/解码的规则
 // ethers.js 需要 ABI 才能知道如何编码和解码数据，以便正确地调用合约函数
+// **核心修正**: 我們需要 PositionNFT 的 ABI 來讀取 tokenOption
+const positionNftAbi = [
+    "function tokenOption(uint256) view returns (uint256)"
+];
 const predictionMarketAbi = [
     "function options(uint256) view returns (bytes32 name, uint256 totalPool)",
     "function totalPool() view returns (uint256)",
     "function isResolved() view returns (bool)",
-    "function winningOptionIndex() view returns (uint256)"
+    "function winningOptionIndex() view returns (uint256)",
+    "function positionNFT() view returns (address)"
 ];
 
 
@@ -95,33 +100,37 @@ const apiKeyMiddleware = (req, res, next) => {
  * :contractAddress 和 :tokenId 是动态路由数据， 可以从 req.params 中获取
  */
 
-app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
+app.get('/metadata/:marketAddress/:tokenId', async (req, res) => {
     try {
-        const { contractAddress, tokenId } = req.params;
-
-        // --- Basic input validation ---
-        if (!ethers.isAddress(contractAddress)) {
-            return res.status(400).json({ error: 'Invalid contract address.' });
+        const { marketAddress, tokenId } = req.params;
+        
+        // 驗證輸入的地址是否合法
+        if (!ethers.isAddress(marketAddress)) {
+            return res.status(400).json({ error: '無效的市場合約地址。' });
         }
-        if (tokenId !== '0' && tokenId !== '1') {
-             return res.status(400).json({ error: 'Token ID must be 0 or 1.' });
-        }
-        // --- End validation ---
 
-        const marketContract = new ethers.Contract(contractAddress, predictionMarketAbi, provider);
+        // 1. 連接到 PredictionMarket 合約
+        const marketContract = new ethers.Contract(marketAddress, predictionMarketAbi, provider);
 
-        // Fetch all data in parallel for efficiency
+        // 2. 從 PredictionMarket 合約中，獲取與之關聯的 PositionNFT 合約地址
+        const nftAddress = await marketContract.positionNFT();
+        const nftContract = new ethers.Contract(nftAddress, positionNftAbi, provider);
+
+        // 3. 從 PositionNFT 合約中，查詢這個 tokenId 究竟是投給了哪個選項 (0 或 1)
+        const userOptionIndex = await nftContract.tokenOption(tokenId);
+
+        // 4. 並行地從 PredictionMarket 獲取所有需要的數據以提高效率
         const [option0, option1, totalPool, isResolved] = await Promise.all([
             marketContract.options(0),
             marketContract.options(1),
             marketContract.totalPool(),
             marketContract.isResolved()
         ]);
-
-        let odds = 50;
-        if (totalPool > 0n) {
-            // Use the token's specific option pool for odds calculation
-            const userOptionPool = tokenId === '0' ? option0.totalPool : option1.totalPool;
+        
+        let odds = 50; 
+        if(totalPool > 0) {
+            // 5. 根據用戶的真實選項來計算他看到的賠率
+            const userOptionPool = userOptionIndex === 0n ? option0.totalPool : option1.totalPool;
             odds = Number((userOptionPool * 100n) / totalPool);
         }
 
@@ -140,20 +149,15 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
 
         if (isResolved) {
             const winningIndex = await marketContract.winningOptionIndex();
-            
-            // --- CORRECTED LOGIC ---
-            // Convert tokenId string to BigInt for comparison
-            const userTokenIdAsBigInt = BigInt(tokenId);
-
-            if (winningIndex === userTokenIdAsBigInt) {
+            // 6. 根據用戶的真實選項來判斷他的 NFT 是勝利还是失敗
+            if (winningIndex === userOptionIndex) {
                 currentImage = imageUrls.win;
                 resultAttribute.value = "Won";
             } else {
                 currentImage = imageUrls.loss;
                 resultAttribute.value = "Lost";
-            }
+            } 
         } else {
-            // This logic correctly reflects the odds for the user's specific token
             if (odds > 75) currentImage = imageUrls.huge_advantage;
             else if (odds > 55) currentImage = imageUrls.slight_advantage;
             else if (odds < 25) currentImage = imageUrls.huge_disadvantage;
@@ -165,10 +169,11 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
             description: "A dynamic NFT representing a position in a dBet prediction market.",
             image: currentImage,
             attributes: [
-                { "trait_type": "Your Option's Odds", "value": `${odds.toFixed(2)}%` },
+                { "trait_type": "Your Option Odds", "value": `${odds.toFixed(2)}%` },
                 resultAttribute
             ]
         };
+        
         res.json(metadata);
 
     } catch (error) {
@@ -176,7 +181,6 @@ app.get('/metadata/:contractAddress/:tokenId', async (req, res) => {
         res.status(500).json({ error: '获取元数据失败。' });
     }
 });
-
 
 /**
  * @route POST /resolve-market
